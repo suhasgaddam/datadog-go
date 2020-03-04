@@ -26,6 +26,10 @@ var (
 	DefaultWriteTimeoutUDS = 1 * time.Millisecond
 	// DefaultTelemetry is the default value for the Telemetry option
 	DefaultTelemetry = true
+	// DefaultSendingMode is the default behavior when sending metrics
+	DefaultSendingMode = BlockOnSend
+	// DefaultDropSendingModeBufferSizer is the default size of the channel holding incoming metrics
+	DefaultDropSendingModeBufferSizer = 2048
 )
 
 // Options contains the configuration options for a client.
@@ -60,20 +64,43 @@ type Options struct {
 	// Telemetry is a set of metrics automatically injected by the client in the
 	// dogstatsd stream to be able to monitor the client itself.
 	Telemetry bool
+	// SendMode determins the behavior of the client when receiving to many
+	// metrics. The client will either drop the metrics if its buffers are
+	// full (DropOnSend mode) or block the caller until the metric can be
+	// handled (BlockOnSend mode). By default the client will block. This
+	// option should be set to DropOnSend only when use under very high
+	// load.
+	//
+	// BlockOnSend uses a mutex internally which is much faster than
+	// channel but causes some lock contention when used with a high number
+	// of threads. Mutex are sharded based on the metrics name which
+	// limit mutex contention when goroutines send different metrics.
+	//
+	// DropOnSend: uses channel (of DropSendingModeBufferSize size) to send
+	// metrics and drop metrics if the channel is full. Sending metrics in
+	// this mode is slower that BlockOnSend (because of the channel), but
+	// will not block the application. This mode is made for application
+	// using many goroutines, sending the same metrics at a very high
+	// volume.
+	SendMode SendingMode
+	// DropSendingModeBufferSize is the size of the channel holding incoming metrics
+	DropSendingModeBufferSize int
 }
 
 func resolveOptions(options []Option) (*Options, error) {
 	o := &Options{
-		Namespace:             DefaultNamespace,
-		Tags:                  DefaultTags,
-		MaxBytesPerPayload:    DefaultMaxBytesPerPayload,
-		MaxMessagesPerPayload: DefaultMaxMessagesPerPayload,
-		BufferPoolSize:        DefaultBufferPoolSize,
-		BufferFlushInterval:   DefaultBufferFlushInterval,
-		BufferShardCount:      DefaultBufferShardCount,
-		SenderQueueSize:       DefaultSenderQueueSize,
-		WriteTimeoutUDS:       DefaultWriteTimeoutUDS,
-		Telemetry:             DefaultTelemetry,
+		Namespace:                 DefaultNamespace,
+		Tags:                      DefaultTags,
+		MaxBytesPerPayload:        DefaultMaxBytesPerPayload,
+		MaxMessagesPerPayload:     DefaultMaxMessagesPerPayload,
+		BufferPoolSize:            DefaultBufferPoolSize,
+		BufferFlushInterval:       DefaultBufferFlushInterval,
+		BufferShardCount:          DefaultBufferShardCount,
+		SenderQueueSize:           DefaultSenderQueueSize,
+		WriteTimeoutUDS:           DefaultWriteTimeoutUDS,
+		Telemetry:                 DefaultTelemetry,
+		SendMode:                  DefaultSendingMode,
+		DropSendingModeBufferSize: DefaultDropSendingModeBufferSizer,
 	}
 
 	for _, option := range options {
@@ -165,6 +192,30 @@ func WithWriteTimeoutUDS(writeTimeoutUDS time.Duration) Option {
 func WithoutTelemetry() Option {
 	return func(o *Options) error {
 		o.Telemetry = false
+		return nil
+	}
+}
+
+// WithDropOnSendMode enables "drop mode"
+func WithDropOnSendMode() Option {
+	return func(o *Options) error {
+		o.SendMode = DropOnSend
+		return nil
+	}
+}
+
+// WithBlockOnSendMode enables "bloc on send" mode (default)
+func WithBlockOnSendMode() Option {
+	return func(o *Options) error {
+		o.SendMode = BlockOnSend
+		return nil
+	}
+}
+
+// WithDropSendingModeBufferSize the channel buffer size when using "drop mode"
+func WithDropSendingModeBufferSize(bufferSize int) Option {
+	return func(o *Options) error {
+		o.DropSendingModeBufferSize = bufferSize
 		return nil
 	}
 }
